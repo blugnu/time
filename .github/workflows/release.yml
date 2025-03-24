@@ -1,0 +1,7 @@
+name: release
+on:
+  - push
+jobs:
+  release:
+    uses: blugnu/.reusable/.github/workflows/pipeline.module-release.yml@v0.4.3
+    secrets: inherit

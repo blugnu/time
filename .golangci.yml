@@ -1,0 +1,25 @@
+linters:
+  enable:
+    - gosec
+  disable:
+    - wsl
+
+#linters-settings:
+  # see: https://golangci-lint.run/usage/linters#linters-configuration
+
+#issues:
+  # see: https://golangci-lint.run/usage/configuration/#issues-configuration
+
+output:
+  # see https://golangci-lint.run/usage/configuration/#output-configuration
+  formats:
+    - format: colored-line-number
+      path: stdout
+
+run:
+  # see: https://golangci-lint.run/usage/configuration/#run-configuration
+  concurrency: 8
+
+#severity:
+  # see: https://golangci-lint.run/usage/configuration/#severity-configuration
+
