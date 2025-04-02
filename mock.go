@@ -1,6 +1,8 @@
 package time
 
 import (
+	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -291,6 +293,40 @@ func (m *mockClock) NewTimer(d time.Duration) *Timer {
 	return m.newTimer(d, nil)
 }
 
+// ContextWithDeadline returns a new context with the given deadline.
+func (m *mockClock) ContextWithDeadline(ctx context.Context, t time.Time) (context.Context, context.CancelFunc) {
+	return m.ContextWithDeadlineCause(ctx, t, nil)
+}
+
+// ContextWithDeadlineCause returns a new context with the given deadline and cause.
+func (m *mockClock) ContextWithDeadlineCause(ctx context.Context, t time.Time, cause error) (context.Context, context.CancelFunc) {
+	d := eval(m, func() time.Duration {
+		return t.Sub(m.now)
+	})
+	return m.ContextWithTimeoutCause(ctx, d, cause)
+}
+
+// ContextWithTimeout returns a new context with the given timeout.
+func (m *mockClock) ContextWithTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	return m.ContextWithTimeoutCause(ctx, d, nil)
+}
+
+// ContextWithTimeoutCause returns a new context with the given timeout and cause.
+func (m *mockClock) ContextWithTimeoutCause(ctx context.Context, d time.Duration, cause error) (context.Context, context.CancelFunc) {
+	deadline := eval(m, func() time.Time {
+		return m.now.Add(d)
+	})
+
+	// if the parent context has a deadline which will occur before the timeout
+	// return a cancellable context (inheriting the parent deadline since that will
+	// be the effective timeout)
+	if px, pd := ctx.Deadline(); pd && px.Before(deadline) {
+		return context.WithCancel(ctx)
+	}
+
+	return newMockContext(ctx, m, deadline, cause)
+}
+
 // ------------------------------------------------------------------------------------------------
 
 // implements the MockClock interface
@@ -571,4 +607,107 @@ func (m *mockClock) newTimer(d time.Duration, fn func()) (result *Timer) {
 	}
 
 	return result
+}
+
+// ensure that mockContext implements the context.Context interface
+var _ context.Context = (*mockContext)(nil)
+
+type mockContext struct {
+	sync.Mutex
+
+	clock    Clock
+	parent   context.Context
+	deadline time.Time
+	done     chan struct{}
+
+	err   error
+	timer *Timer
+}
+
+// newMockContext returns a new context with the given deadline and a
+// cancellable timer.
+//
+// If the specified deadline has already passed, the context is immediately
+// cancelled with context.DeadlineExceeded.
+func newMockContext(
+	parent context.Context,
+	clock Clock,
+	deadline time.Time,
+	cause error,
+) (*mockContext, context.CancelFunc) {
+	ctx := &mockContext{
+		clock:    clock,
+		parent:   parent,
+		deadline: deadline.UTC(),
+		done:     make(chan struct{}),
+	}
+
+	// if the parent has a cancellation channel arrange to cancel the new
+	// child context if the parent is cancelled
+	if parent.Done() != nil {
+		go func() {
+			select {
+			case <-parent.Done():
+				ctx.cancel(parent.Err())
+			case <-ctx.Done():
+				// if the child context is cancelled, stop listening for
+				// cancellation on the parent context
+			}
+		}()
+	}
+
+	dur := clock.Until(deadline)
+	if dur <= 0 {
+		ctx.cancel(context.DeadlineExceeded) // deadline has already passed
+		return ctx, func() { /* NO-OP */ }
+	}
+
+	ctx.Lock()
+	defer ctx.Unlock()
+
+	if ctx.err == nil {
+		// if the context is not already cancelled, start a timer to cancel
+		// the context when the deadline is reached
+		ctx.timer = clock.AfterFunc(dur, func() {
+			err := context.DeadlineExceeded
+			if cause != nil {
+				err = fmt.Errorf("%w: %w", err, cause)
+			}
+			ctx.cancel(err)
+		})
+	}
+
+	// return the new context and a cancel function
+	// the cancel function will stop the timer if it is still running
+	// and cancel the context
+	return ctx, func() { ctx.cancel(context.Canceled) }
+}
+
+func (c *mockContext) cancel(err error) {
+	c.Lock()
+	defer c.Unlock()
+
+	if c.err != nil {
+		return // already canceled
+	}
+
+	c.err = err
+	close(c.done)
+
+	if c.timer != nil {
+		c.timer.Stop()
+		c.timer = nil
+	}
+}
+
+func (c *mockContext) Deadline() (deadline time.Time, ok bool) { return c.deadline, true }
+
+func (c *mockContext) Done() <-chan struct{} { return c.done }
+
+func (c *mockContext) Err() error { return c.err }
+
+func (c *mockContext) Value(key any) any { return c.parent.Value(key) }
+
+func (c *mockContext) String() string {
+	return fmt.Sprintf("mock: context.WithDeadline: %s: %s", c.deadline.Sub(c.clock.Now()), c.deadline)
 }

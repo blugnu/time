@@ -94,6 +94,47 @@ func Test_ContextWithMockClock_ParentContextHasClock(t *testing.T) {
 
 // Tests that a context created using ContextWithTimeoutCause that is not mocked
 // is cancelled when deadline is reached.
+func Test_ContextWithDeadlineCause(t *testing.T) {
+	ctx := ContextWithClock(context.Background(), SystemClock())
+	ctx, _ = ContextWithDeadlineCause(ctx, SystemClock().Now().Add(2*time.Millisecond), nil)
+
+	var (
+		cancelled atomic.Bool
+		listener  WaitFuncs
+	)
+	listener.Go(func() {
+		<-ctx.Done()
+		cancelled.Store(true)
+	})
+	listener.Wait()
+
+	test.IsTrue(t, cancelled.Load(), "context cancelled")
+	test.Error(t, ctx.Err()).Is(context.DeadlineExceeded)
+}
+
+// Tests that a context created using ContextWithDeadline that is not mocked
+// is cancelled when deadline is reached.
+func Test_ContextWithDeadline(t *testing.T) {
+	ctx := ContextWithClock(context.Background(), SystemClock())
+	ctx, _ = ContextWithDeadline(ctx, SystemClock().Now().Add(2*time.Millisecond))
+
+	var (
+		cancelled atomic.Bool
+		listener  WaitFuncs
+	)
+	listener.Go(func() {
+		<-ctx.Done()
+		cancelled.Store(true)
+	})
+	time.Sleep(3 * time.Millisecond)
+	listener.Wait()
+
+	test.Error(t, ctx.Err()).Is(context.DeadlineExceeded)
+	test.IsTrue(t, cancelled.Load(), "context cancelled when deadline reached")
+}
+
+// Tests that a context created using ContextWithTimeoutCause that is not mocked
+// is cancelled when deadline is reached.
 func Test_ContextWithTimeoutCause(t *testing.T) {
 	ctx := ContextWithClock(context.Background(), SystemClock())
 	ctx, _ = ContextWithTimeoutCause(ctx, 2*time.Millisecond, nil)
@@ -170,6 +211,23 @@ func Test_Mocked_ContextWithDeadline(t *testing.T) {
 	}
 }
 
+// Tests that a mocked ContextWithDeadlineCause wraps the cause error
+// and is cancelled when the mock clock is advanced to the deadline.
+func Test_Mocked_ContextWithDeadlineCause(t *testing.T) {
+	cause := errors.New("cause")
+	ctx, m := ContextWithMockClock(context.Background())
+	ctx, _ = ContextWithDeadlineCause(ctx, m.Now().Add(time.Second), cause)
+	m.AdvanceBy(time.Second)
+	select {
+	case <-ctx.Done():
+		test.Error(t, ctx.Err()).Is(context.DeadlineExceeded)
+		test.Error(t, ctx.Err()).Is(cause)
+		test.String(t, ctx.Err().Error()).Equals("context deadline exceeded: cause")
+	default:
+		t.Error("context was not cancelled")
+	}
+}
+
 // Tests that a mocked ContextWithDeadline does nothing when the deadline
 // is later than a deadline in the parent context.
 func Test_Mocked_ContextWithDeadline_LaterThanParent(t *testing.T) {
@@ -180,11 +238,9 @@ func Test_Mocked_ContextWithDeadline_LaterThanParent(t *testing.T) {
 	m.AdvanceBy(time.Second)
 	select {
 	case <-ctx.Done():
-		if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			t.Error("invalid type of error returned when deadline exceeded")
-		}
+		test.Error(t, ctx.Err()).Is(context.DeadlineExceeded)
 	default:
-		t.Error("context is not cancelled when deadline exceeded")
+		t.Error("context was not cancelled")
 	}
 }
 
@@ -291,10 +347,8 @@ func Test_Mocked_ContextWithTimeout(t *testing.T) {
 	clock.AdvanceBy(time.Second)
 	select {
 	case <-ctx.Done():
-		if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			t.Error("invalid type of error returned when time is over")
-		}
+		test.Error(t, ctx.Err()).Is(context.DeadlineExceeded)
 	default:
-		t.Error("context is not cancelled when time is over")
+		t.Error("context was not cancelled")
 	}
 }
