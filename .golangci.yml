@@ -1,10 +1,17 @@
+# version: "1"
 linters:
   enable:
     - gosec
   disable:
     - wsl
 
-#linters-settings:
+linters-settings:
+  # see: v1: https://golangci-lint.run/usage/linters/#enabled-by-default
+  godox:
+    keywords:
+      - "TODO"
+
+# settings: (v2)
   # see: https://golangci-lint.run/usage/linters#linters-configuration
 
 #issues:
@@ -12,6 +19,7 @@ linters:
 
 output:
   # see https://golangci-lint.run/usage/configuration/#output-configuration
+  print-issued-lines: false
   formats:
     - format: colored-line-number
       path: stdout
