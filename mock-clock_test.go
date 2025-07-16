@@ -46,15 +46,22 @@ func TestClockOption_DropsTicks(t *testing.T) {
 	// arrange: establish a mock clock with DropsTicks set, create
 	// a ticker to tick every 1s and start a goroutine to count the
 	// ticks from the ticker
-	clock := time.NewMockClock(time.DropsTicks())
-	var cnt atomic.Uint32
-
-	ticker := clock.NewTicker(1 * time.Second)
+	var (
+		cnt    atomic.Uint32
+		clock  = time.NewMockClock(time.DropsTicks())
+		ticker = clock.NewTicker(1 * time.Second)
+		done   = make(chan struct{})
+	)
+	defer close(done) // terminates the goroutine we are about to start
 
 	go func() {
 		for {
-			<-ticker.C
-			cnt.Add(1)
+			select {
+			case <-ticker.C:
+				cnt.Add(1)
+			case <-done:
+				return
+			}
 		}
 	}()
 
@@ -84,36 +91,36 @@ func TestClockOption_InLocation(t *testing.T) {
 func TestClockOption_StartRunning(t *testing.T) {
 	With(t)
 
-	Run("new mock clocks are not running by default", func() {
+	Run(Test("new mock clocks are not running by default", func() {
 		// arrange: create a clock in default (stopped) state
 		clock := time.NewMockClock()
 
 		// assert: that the clock is not running
 		Expect(clock.IsRunning()).To(BeFalse())
-	})
+	}))
 
-	Run("StartRunning() option starts the mock clock", func() {
+	Run(Test("StartRunning() option starts the mock clock", func() {
 		// arrange: create a clock in default (stopped) state
 		clock := time.NewMockClock(time.StartRunning())
 
 		// assert: that the clock IS running
 		Expect(clock.IsRunning()).To(BeTrue())
-	})
+	}))
 }
 
-// Tests that YieldingFor sets the duration for which the calling goroutine is to be suspended
+// Tests that YieldTime sets the duration for which the calling goroutine is to be suspended
 // when performing operations such as advancing the clock or adding a timer or ticker.
-func TestClockOption_YieldingFor(t *testing.T) {
+func TestClockOption_YieldTime(t *testing.T) {
 	With(t)
 
 	// arrange
 	d := 10 * time.Millisecond
 
 	// act: set a larger than usual yield time to make measurement more reliable
-	mock := time.NewMockClock(time.Yielding(d))
+	mock := time.NewMockClock(time.YieldTime(d))
 
 	// having set a 10ms Yield time, any advancement of the mock clock will
-	// require at least 10ms to complete, even if advancing by a shorter duratio
+	// require at least 10ms to complete, even if advanced by a shorter duration
 
 	// assert
 	elapsed := time.Dur(func() {

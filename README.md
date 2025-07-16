@@ -39,10 +39,9 @@ scenarios in accelerated, deterministic time.
   with a mock clock, allowing for testing of time-based code without relying on the system clock or
   the passage of real time;
 
-- **Compatible**: Compatible with the standard library `time` package where appropriate,
-  allowing for easy migration from the standard library to `blugnu/time`; provides aliases for
-  types and functions that are not clock-dependent with alternative functions for
-  clock-dependent functionality;
+- **Compatible**: Works as a drop-in replacement for the standard library `time` package, easing
+  migration to `blugnu/time`.  Clock-agnostic types & functions are aliased, while
+  clock-dependent operations have context-aware alternatives;
 
 - **Lightweight**: No external dependencies, making it easy to use and integrate into
   existing projects;
@@ -57,6 +56,64 @@ go get github.com/blugnu/time
 
 As far as possible, `blugnu/time` is designed to be a drop-in replacement for the standard
 library `time` package with additional functions where required.
+
+### Migration From Standard Library
+
+Migration from the standard library `time` package to `blugnu/time` involves replacing
+references to the `time` package with references to a `blugnu/time.Clock` interface,
+usually obtained from a context:
+
+```golang
+    import "time"
+
+    func DoSomethingTimeDependent(ctx context.Context) {
+        ux := time.Now()
+        // ...
+    }
+```
+
+becomes:
+
+```golang
+    import "github.com/blugnu/time"
+
+    func DoSomethingTimeDependent(ctx context.Context) {
+        time := time.FromContext(ctx)
+
+        ux := time.Now()
+        // ...
+    }
+```
+
+Note that shadowing the `time` package can be a quick way to migrate code that
+uses the standard library `time` package to use the `blugnu/time` package.
+However, this may upset some linters and could cause confusion in larger
+codebases.  If this is a concern, an alternative name can be used for the clock
+variable, although this will require more changes to migrate the codebase:
+
+```golang
+    import "github.com/blugnu/time"
+
+    func DoSomethingTimeDependent(ctx context.Context) {
+        clock := time.FromContext(ctx)
+
+        ux := clock.Now()
+        // ...
+    }
+```
+
+Alternatively, functions are provided in the `blugnu/time` package that correspond
+to the standard library `time` package functions, with the addition of requiring a
+context:
+
+```golang
+    import "github.com/blugnu/time"
+
+    func DoSomethingTimeDependent(ctx context.Context) {
+        ux := time.Now(ctx)
+        // ...
+    }
+```
 
 ### Clock-Independent Usage
 
@@ -97,8 +154,8 @@ time which would cause unpredictable behaviour in tests.
 
 ### Context Deadlines and Timeouts
 
-Context deadlines and timeouts are also clock-dependent.  The `blugnu/time` package provides
-a `ContextWithDeadline` and `ContextWithTimeout` functions that return a context with a
+Context deadlines and timeouts are clock-dependent.  The `blugnu/time` package provides
+`ContextWithDeadline` and `ContextWithTimeout` functions that return a context with a
 deadline or timeout that is based on the clock passed in the context.  When using a mock
 clock, the deadline or timeout will be based on the mock clock, allowing for deterministic
 behaviour in tests.
@@ -126,34 +183,35 @@ behaviour in tests.
 #### Example
 
 ```golang
-// Simulates testing some code which uses a context with a timeout that would
-// normally take 10 seconds to complete if testing the context deadline expiry.
+// Simulates testing some code using a context with a timeout that would
+// normally take 10 seconds to complete in real-time.
 // 
 // The test will instead run in milliseconds.
 func TestAcceleratedTime() {
   // create a mock clock
   clock := time.NewMockClock()
 
-  // create a context with a 10s timeout; the cancel function is not used 
-  timer, _ := clock.ContextWithTimeout(context.Background(), 10*time.Second)
+  // create a context with a 10s timeout
+  ctx, cancel := clock.ContextWithTimeout(context.Background(), 10*time.Second)
+  defer cancel() // ensure the context is cancelled to avoid leaks
 
   // start a goroutine that will block until the context is cancelled;
   // a waitgroup is used to sync with the test
   var wg sync.WaitGroup
   wg.Add(1)
   go func() {
-    defer wg.Done()
-    <-timer.Done()
+    <-ctx.Done()
+    wg.Done()
   }()
 
   // advance the mock clock by 10s; this will cause the context to be cancelled
-  // and the goroutine to unblock
+  // immediately and the goroutine to unblock
   clock.AdvanceBy(10 * time.Second)
   wg.Wait()
 
   // verify that the context was cancelled due to the timeout
-  if timer.Err() != context.DeadlineExceeded {
-    t.Errorf("expected context.DeadlineExceeded, got %s", timer.Err())
+  if ctx.Err() != context.DeadlineExceeded {
+    t.Errorf("expected context.DeadlineExceeded, got %s", ctx.Err())
   }
 }
 ```
@@ -195,6 +253,11 @@ a test that requires many hours of elapsed clock time can be executed in millise
 Individual tests may use different mock clocks, allowing for different tests to run at different
 rates or to simulate different clock behaviours.
 
+> :bulb: A mocked clock in a test is only effective if the code
+> being tested is "context-clock aware".  It must consistently
+> use a clock obtained from context and/or use the `blugnu/time`
+> package functions that accept a context.
+
 ## Running vs Stopped Clock
 
 A mock clock can be either running or stopped.  Mock clocks are created stopped by default,
@@ -211,18 +274,34 @@ of time in tests.
 When a mock clock is running, it will advance time automatically in real-time whenever
 a clock operation is performed involving the current time, or the `Update` method called.
 
-Despite the terminology, a running mock clock will not update in the background.
+> :bulb: A running mock clock **does not** update in the background. The "running" state
+> means that the clock advances in real-time only when it is interacted with and it
+> cannot be explicitly advanced by arbitrary increments (`AdvanceBy` or `AdvanceTo`).
 
 Attempting to explicitly advance a running clock will result in a panic.  This is to prevent
 accidental use of a running clock in tests that expect a stopped clock.
 
-### Stopping and Starting
+Similarly, calling `Update` on a stopped clock will also result in a panic.
 
-Although not usually necessary or recommended, a mock clock may be stopped and started using
-the `Stop` and `Start` methods.  Every call to `Stop` must be matched with a call to `Start` to
-resume running.
+### Stopping and Starting (a Running Clock)
+
+Although not usually necessary or recommended, a running mock clock may be stopped and
+started using the `Stop` and `Start` methods.  Every call to `Stop` must be matched with
+a call to `Start` to resume running.
 
 Attempting to `Start` a clock that is already running will result in a panic.
+
+### Sleeping
+
+Sleeping a mocked clock will block the calling goroutine until the mock time has advanced
+by the specified duration.
+
+For a running clock, this is handled by waiting for the specified duration using the
+system clock.
+
+For a stopped clock, the calling goroutine will be suspended until the mock clock has been
+advanced by the specified duration.  Since the caller is suspended, the clock must be
+advanced by some other goroutine to resume the caller.
 
 ## Mock Clock Options
 
@@ -246,15 +325,21 @@ fire only once in this situation, at the end of the 10 seconds.
 
 ### time.InLocation
 
-The `InLocation` option allows you to set the location of the mock clock. The default is UTC.
+The `InLocation` option allows you to set the location of the mock clock. The default is `UTC`.
 
 ### time.StartRunning
 
 The `StartRunning` option sets the mock clock to start running immediately when it is
 created.  By default, the mock clock is stopped and must be started manually if required.
 
-### time.Yielding
+### time.YieldTime
 
-The mock clock suspends the calling goroutine for 1ms when performing certain operations.
-The `Yielding` option allows this to be changed to some other duration or disabled entirely
-(specifying a duration of 0).
+The mock clock suspends the calling goroutine for 1ms when performing certain operations,
+allowing goroutines to be scheduled if required.
+
+> :bulb: This is not always necessary, but avoids having to manually yield the goroutine in
+> tests that may otherwise block indefinitely and involves negligible overhead for tests
+> that do not require it.
+
+The `YieldTime` option allows the time for which the caller is suspended to be changed or
+disabled entirely (specifying a duration of 0) if required.

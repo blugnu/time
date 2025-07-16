@@ -151,7 +151,7 @@ func ExampleMockClock_NewTimer() {
 	// Count is 1 after 10 seconds
 }
 
-func ExampleTicker() {
+func ExampleNewTicker() {
 	// using the system clock
 	clock := time.SystemClock()
 	start := clock.Now()

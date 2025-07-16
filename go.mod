@@ -1,7 +1,9 @@
 module github.com/blugnu/time
 
-// requiring go1.23 ensures that the Tick function will not leak a Ticker
+// adopting go1.23 as the minimum version simplifies ticker and timer
+// implementation by eliminating the need to handle or document changes
+// that occurred in Go 1.23 vs previous versions
 
 go 1.23
 
-require github.com/blugnu/test v0.7.0
+require github.com/blugnu/test v0.11.0

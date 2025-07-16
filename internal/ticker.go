@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// Ticker implements a ticker that can be used with a mock clock
 type Ticker struct {
 	// wraps a time.Timer in normal use; for a mock, this is non-nil but is
 	// used only as a container for the <-chan time.Time read-only reference
@@ -26,7 +27,7 @@ type Ticker struct {
 // next tick will occur at the specified duration from the current time.
 //
 // The function panics if the given duration is zero or negative, or if the
-// Ticker has not been initialized, .
+// Ticker has not been initialized.
 func (t *Ticker) Reset(d time.Duration) {
 	if !t.initialised {
 		panic(fmt.Errorf("%w Ticker", errResetCalledOnUninitialized))
@@ -43,11 +44,12 @@ func (t *Ticker) Reset(d time.Duration) {
 // Stop stops the ticker and prevents any further ticks from being sent to
 // the channel; the channel is not closed.
 func (t *Ticker) Stop() {
-	if t.isMocked() {
+	switch {
+	case t.isMocked():
 		t.ticker.stop()
+	case t.initialised:
+		t.Ticker.Stop()
 	}
-
-	t.Ticker.Stop()
 }
 
 // ticker implements the behaviour of a Ticker using a mock clock.
@@ -56,7 +58,7 @@ type ticker struct {
 	c        chan time.Time
 	d        time.Duration
 	next     time.Time
-	state    TickerState
+	state    tickerState
 	clock    *MockClock
 }
 
@@ -68,7 +70,7 @@ func (mock *ticker) id() int {
 // enterState handles the transition of the ticker to a new state.
 // It will panic if the transition is invalid or if the state is not
 // supported by the ticker.
-func (mock *ticker) enterState(state TickerState) {
+func (mock *ticker) enterState(state tickerState) {
 	if mock.state == state {
 		return
 	}
@@ -135,9 +137,17 @@ func (t *ticker) tick(now time.Time) bool {
 		}
 	}
 
-	// tick at the time that was determined and yield to allow any goroutines
-	// that may be waiting on the ticker channel to be scheduled
-	go func() { t.clock.withLock(func(c *MockClock) { c.now = at }); t.c <- at }()
+	// tick at the time that was determined
+	go func() {
+		clock := t.clock
+		clock.Lock()
+		clock.now = at
+		clock.Unlock()
+
+		t.c <- at
+	}()
+
+	// yield to allow goroutines waiting on the ticker channel to be scheduled
 	time.Sleep(t.clock.yield)
 
 	return true

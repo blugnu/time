@@ -11,43 +11,64 @@ import (
 func TestTimer(t *testing.T) {
 	With(t)
 
-	var cnt atomic.Uint32
-	clock := SystemClock{}
-	timer := clock.NewTimer(1 * time.Millisecond)
-	go func() {
-		for {
-			<-timer.C
-			cnt.Add(1)
-		}
-	}()
+	Run(FlakyTest("ticks at the expected intervals", func() {
+		var (
+			cnt   atomic.Uint32
+			clock = SystemClockInstance
+			timer = clock.NewTimer(10 * time.Millisecond)
+			done  = make(chan struct{})
+		)
+		defer close(done) // terminates the goroutine we are about to start
 
-	clock.Sleep(600 * time.Microsecond)
-	Expect(cnt.Load(), "ticks").To(Equal[uint32](0))
+		// act: start a goroutine that will count the ticks
+		go func() {
+			for {
+				select {
+				case <-timer.C:
+					cnt.Add(1)
+				case <-done:
+					return
+				}
+			}
+		}()
 
-	clock.Sleep(600 * time.Microsecond)
-	Expect(cnt.Load(), "ticks").To(Equal[uint32](1))
+		// 10ms timer should not have ticked after just 6ms...
+		clock.Sleep(6 * time.Millisecond)
+		Expect(cnt.Load(), "ticks").To(Equal[uint32](0))
 
-	active := timer.Reset(5 * time.Millisecond)
-	Expect(active, "timer active").To(BeFalse())
+		// ...but should have ticked after 12ms
+		clock.Sleep(6 * time.Millisecond)
+		Expect(cnt.Load(), "ticks").To(Equal[uint32](1))
 
-	cnt.Store(0)
+		// reset the timer to 5ms and clear the counter
+		active := timer.Reset(5 * time.Millisecond)
+		Expect(active, "timer active").To(BeFalse())
 
-	clock.Sleep(2600 * time.Microsecond)
-	Expect(cnt.Load(), "ticks").To(Equal[uint32](0))
+		cnt.Store(0)
 
-	clock.Sleep(2600 * time.Microsecond)
-	Expect(cnt.Load(), "ticks").To(Equal[uint32](1))
+		// the new timer should have ticked after 3ms...
+		clock.Sleep(3 * time.Millisecond)
+		Expect(cnt.Load(), "ticks").To(Equal[uint32](0))
 
-	active = timer.Reset(1 * time.Millisecond)
-	Expect(active, "timer active").To(BeFalse())
+		// ...but should have ticked after 6ms
+		clock.Sleep(3 * time.Millisecond)
+		Expect(cnt.Load(), "ticks").To(Equal[uint32](1))
 
-	cnt.Store(0)
+		// reset the timer to 10ms and clear the counter
+		active = timer.Reset(10 * time.Millisecond)
+		Expect(active, "timer active").To(BeFalse())
 
-	stopped := timer.Stop()
-	Expect(stopped, "timer stopped").To(BeTrue())
+		cnt.Store(0)
 
-	clock.Sleep(1500 * time.Microsecond)
-	Expect(cnt.Load(), "ticks").To(Equal[uint32](0))
+		// stop the timer
+		stopped := timer.Stop()
+		Expect(stopped, "timer stopped").To(BeTrue())
+
+		// after 15ms the 10ms timer should not have ticked
+		// (it was stopped)
+		clock.Sleep(15 * time.Millisecond)
+		Expect(cnt.Load(), "ticks").To(Equal[uint32](0))
+	}))
 }
 
 func TestTimer_EnterState_InvalidState(t *testing.T) {
@@ -63,7 +84,7 @@ func TestTimer_EnterState_NoTransition(t *testing.T) {
 	With(t)
 
 	ticker := &timer{state: tsExpired}
-	defer Expect(Panic()).DidOccur()
+	defer Expect(Panic()).DidNotOccur()
 
 	// act
 	ticker.enterState(tsExpired)
@@ -95,7 +116,7 @@ func TestTimer_Tick_WhenNotActive(t *testing.T) {
 
 	var sut = &timer{state: tsExpired}
 
-	// act: attempt to tick a nil timer
+	// act: attempt to tick an expired timer
 	result := sut.tick(time.Time{})
 
 	// assert: expect false

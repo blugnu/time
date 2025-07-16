@@ -3,58 +3,56 @@ package time
 import (
 	"context"
 	"time"
+
+	"github.com/blugnu/time/internal"
 )
 
-type contextKey int
-
-const clockKey contextKey = iota
-
-// ClockFromContext returns the Clock in the given context.
-// If no Clock is in the context the system clock is returned.
-func ClockFromContext(ctx context.Context) Clock {
-	if clock := TryClockFromContext(ctx); clock != nil {
+// FromContext returns the Clock in the given context. This function always
+// returns a Clock; if no Clock is in the context, the SystemClock is returned.
+func FromContext(ctx context.Context) Clock {
+	if clock := TryFromContext(ctx); clock != nil {
 		return clock
 	}
 	return SystemClock()
 }
 
-// TryClockFromContext returns the Clock in the given context or nil
-// if no Clock is present.
-func TryClockFromContext(ctx context.Context) Clock {
-	if c, ok := ctx.Value(clockKey).(Clock); ok {
-		return c
-	}
-	return nil
+// TryFromContext returns the Clock in the given context or nil if no Clock
+// is present.
+func TryFromContext(ctx context.Context) Clock {
+	return internal.ClockFromContext(ctx)
 }
 
-// ContextWithMockClock returns a new context with a mock clock configured with the
-// given options.  If the parent context already has a clock the function panics
-// with ErrClockAlreadyExists.
+// ContextWithMockClock is a convenience function for creating a context containing
+// a new mock clock initialised with specified options.  The function returns the new
+// Context and the MockClock.
 //
-// This function is provided as a convenience when writing tests requiring a mock
-// clock.
-func ContextWithMockClock(parent context.Context, opts ...ClockOption) (context.Context, MockClock) {
-	if clock := TryClockFromContext(parent); clock != nil {
+// If the parent context already has a clock the function panics with ErrClockAlreadyExists.
+//
+// This function is intended for testing purposes where the calling function is confident
+// that the parent context does not already contain a clock.  The test is able to control
+// the simulated passage of time by advancing the mock clock.
+func ContextWithMockClock(parent context.Context, opts ...MockClockOption) (context.Context, MockClock) {
+	if clock := TryFromContext(parent); clock != nil {
 		panic(ErrClockAlreadyExists)
 	}
 
-	m := NewMockClock(opts...)
+	m := internal.NewMockClock(opts...)
 	return ContextWithClock(parent, m), m
 }
 
 // ContextWithClock returns a new context containing a given clock.
 //
-//   - If the context already contains a clock the function panics with ErrClockAlreadyExists.
-//   - If the given clock is nil a new context is returned with the system clock added.
+//   - if the context already contains a clock the function panics with ErrClockAlreadyExists
+//   - if the specified Clock is nil, a new context is returned with the SystemClock
 func ContextWithClock(ctx context.Context, c Clock) context.Context {
-	if clock := TryClockFromContext(ctx); clock != nil {
-		panic(ErrClockAlreadyExists)
-	}
+	clock := TryFromContext(ctx)
 	switch {
+	case clock != nil:
+		panic(ErrClockAlreadyExists)
 	case c == nil:
-		return context.WithValue(ctx, clockKey, SystemClock())
+		return internal.ContextWithClock(ctx, internal.SystemClockInstance)
 	default:
-		return context.WithValue(ctx, clockKey, c)
+		return internal.ContextWithClock(ctx, c)
 	}
 }
 
@@ -68,7 +66,7 @@ func ContextWithClock(ctx context.Context, c Clock) context.Context {
 // If the context contains a mock clock, the deadline will expire when that
 // mock clock is advanced to the deadline or later.
 func ContextWithDeadline(ctx context.Context, t time.Time) (context.Context, context.CancelFunc) {
-	return ClockFromContext(ctx).ContextWithDeadline(ctx, t)
+	return FromContext(ctx).ContextWithDeadline(ctx, t)
 }
 
 // ContextWithDeadlineCause returns a new context with the given deadline and cause.
@@ -83,7 +81,7 @@ func ContextWithDeadline(ctx context.Context, t time.Time) (context.Context, con
 // If the context contains a mock clock, the deadline will expire when that
 // mock clock is advanced to the deadline or later.
 func ContextWithDeadlineCause(ctx context.Context, t time.Time, cause error) (context.Context, context.CancelFunc) {
-	return ClockFromContext(ctx).ContextWithDeadlineCause(ctx, t, cause)
+	return FromContext(ctx).ContextWithDeadlineCause(ctx, t, cause)
 }
 
 // ContextWithTimeout returns a new context with the given timeout.
@@ -96,7 +94,7 @@ func ContextWithDeadlineCause(ctx context.Context, t time.Time, cause error) (co
 // If the context contains a mock clock, the timeout will expire when that
 // mock clock is advanced by at least the given duration from its current time.
 func ContextWithTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
-	return ClockFromContext(ctx).ContextWithTimeout(ctx, d)
+	return FromContext(ctx).ContextWithTimeout(ctx, d)
 }
 
 // ContextWithTimeoutCause returns a new context with the given timeout and cause.
@@ -112,5 +110,5 @@ func ContextWithTimeout(ctx context.Context, d time.Duration) (context.Context, 
 // mock clock is advanced by at least the given duration from its current time.
 // The cause is used to set the context error.
 func ContextWithTimeoutCause(ctx context.Context, d time.Duration, cause error) (context.Context, context.CancelFunc) {
-	return ClockFromContext(ctx).ContextWithTimeoutCause(ctx, d, cause)
+	return FromContext(ctx).ContextWithTimeoutCause(ctx, d, cause)
 }

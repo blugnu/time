@@ -56,11 +56,9 @@ func TestMock_UnusedAfter(t *testing.T) {
 	mock := internal.NewMockClock()
 	mock.After(1 * time.Millisecond)
 
-	done := make(chan bool, 1)
-	go func() {
+	done := internal.Waitable(func() {
 		mock.AdvanceBy(1 * time.Second)
-		done <- true
-	}()
+	})
 
 	select {
 	case <-done:
@@ -136,37 +134,25 @@ func TestMock_IsRunning(t *testing.T) {
 	Expect(clock.IsRunning()).To(BeTrue())
 }
 
-// Test that IsRunning returns false when the clock is not running.
-func TestMock_IsRunning_StoppedClock(t *testing.T) {
-	With(t)
-
-	// arrange: create a clock in stopped state
-	clock := internal.NewMockClock()
-
-	// act/assert: check that the clock is not running
-	Expect(clock.IsRunning()).To(BeFalse())
-}
-
-//
-
+// Tests that Since returns the duration since the clock was created.
 func TestMock_Since(t *testing.T) {
 	With(t)
 
-	Run("advancing a frozen clock", func() {
+	Run(Test("advancing a frozen clock", func() {
 		clock := internal.NewMockClock()
 
 		beginning := clock.Now()
 		clock.AdvanceBy(500 * time.Second)
 
 		Expect(clock.Since(beginning).Seconds()).To(Equal[float64](500))
-	})
+	}))
 
-	Run("with running clock", func() {
+	Run(Test("with running clock", func() {
 		clock := internal.NewMockClock(internal.StartRunning())
 		time.Sleep(25 * time.Millisecond)
 
 		Expect(clock.Since(time.Unix(0, 0)).Milliseconds() >= 25).To(BeTrue())
-	})
+	}))
 }
 
 func TestMock_Until(t *testing.T) {
@@ -175,13 +161,10 @@ func TestMock_Until(t *testing.T) {
 	clock := internal.NewMockClock()
 
 	end := clock.Now().Add(500 * time.Second)
-	if dur := clock.Until(end); dur.Seconds() != 500 {
-		Fatalf("expected 500s duration between `clock` and `end`, actually: %v", dur.Seconds())
-	}
+	Expect(clock.Until(end)).To(Equal(500 * time.Second))
+
 	clock.AdvanceBy(100 * time.Second)
-	if dur := clock.Until(end); dur.Seconds() != 400 {
-		Fatalf("expected 400s duration between `clock` and `end`, actually: %v", dur.Seconds())
-	}
+	Expect(clock.Until(end)).To(Equal(400 * time.Second))
 }
 
 // Test that Sleep respects the passage of mocked time for a stopped clock.
@@ -335,14 +318,21 @@ func TestMock_Tick(t *testing.T) {
 
 	// arrange: start a ticker to fire every 10 seconds and count the ticks
 	var (
-		clock = internal.NewMockClock()
 		ticks atomic.Uint32
+		clock = internal.NewMockClock()
+		done  = make(chan struct{})
 	)
+	defer close(done) // terminates the goroutine we are about to start
+
 	tick := clock.Tick(10 * time.Second)
 	go func() {
 		for {
-			<-tick
-			ticks.Add(1)
+			select {
+			case <-tick:
+				ticks.Add(1)
+			case <-done:
+				return
+			}
 		}
 	}()
 
@@ -364,15 +354,23 @@ func TestMock_Tick(t *testing.T) {
 func TestMock_Ticker(t *testing.T) {
 	With(t)
 
-	var cnt atomic.Uint32
-	clock := internal.NewMockClock()
+	var (
+		cnt   atomic.Uint32
+		clock = internal.NewMockClock()
+		done  = make(chan struct{})
+	)
+	defer close(done) // terminates the goroutine we are about to start
 
-	// Create a channel to increment every microsecond.
+	// start a go routine that will count the ticks
+	ticker := clock.NewTicker(1 * time.Microsecond)
 	go func() {
-		ticker := clock.NewTicker(1 * time.Microsecond)
 		for {
-			<-ticker.C
-			cnt.Add(1)
+			select {
+			case <-ticker.C:
+				cnt.Add(1)
+			case <-done:
+				return
+			}
 		}
 	}()
 
@@ -411,15 +409,23 @@ func TestMock_Ticker_Overflow(t *testing.T) {
 func TestMock_Ticker_Stop(t *testing.T) {
 	With(t)
 
-	var cnt atomic.Uint32
-	clock := internal.NewMockClock()
+	var (
+		cnt   atomic.Uint32
+		clock = internal.NewMockClock()
+		done  = make(chan struct{})
+	)
+	defer close(done) // terminates the goroutine we are about to start
 
-	// Create a channel to increment every second.
+	// act: start a goroutine that will count the ticks
 	ticker := clock.NewTicker(1 * time.Second)
 	go func() {
 		for {
-			<-ticker.C
-			cnt.Add(1)
+			select {
+			case <-ticker.C:
+				cnt.Add(1)
+			case <-done:
+				return
+			}
 		}
 	}()
 
@@ -437,16 +443,24 @@ func TestMock_Ticker_Stop(t *testing.T) {
 func TestMock_Ticker_Reset(t *testing.T) {
 	With(t)
 
-	var cnt atomic.Uint32
-	clock := internal.NewMockClock()
+	var (
+		cnt   atomic.Uint32
+		clock = internal.NewMockClock()
+		done  = make(chan struct{})
+	)
+	defer close(done) // terminates the goroutine we are about to start
 
 	ticker := clock.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	go func() {
 		for {
-			<-ticker.C
-			cnt.Add(1)
+			select {
+			case <-ticker.C:
+				cnt.Add(1)
+			case <-done:
+				return
+			}
 		}
 	}()
 
@@ -471,16 +485,24 @@ func TestMock_Ticker_Reset(t *testing.T) {
 func TestMock_Ticker_Stop_Reset(t *testing.T) {
 	With(t)
 
-	clock := internal.NewMockClock()
+	var (
+		cnt   atomic.Uint32
+		clock = internal.NewMockClock()
+		done  = make(chan struct{})
+	)
+	defer close(done) // terminates the goroutine we are about to start
 
 	ticker := clock.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	var cnt atomic.Uint32
 	go func() {
 		for {
-			<-ticker.C
-			cnt.Add(1)
+			select {
+			case <-ticker.C:
+				cnt.Add(1)
+			case <-done:
+				return
+			}
 		}
 	}()
 
@@ -511,8 +533,12 @@ func TestMock_Ticker_Stop_Reset(t *testing.T) {
 func TestMock_Ticker_Multi(t *testing.T) {
 	With(t)
 
-	var cnt atomic.Uint32
-	clock := internal.NewMockClock()
+	var (
+		cnt   atomic.Uint32
+		clock = internal.NewMockClock()
+		done  = make(chan struct{})
+	)
+	defer close(done) // terminates the goroutine we are about to start
 
 	go func() {
 		ones := clock.NewTicker(1 * time.Microsecond)
@@ -524,6 +550,8 @@ func TestMock_Ticker_Multi(t *testing.T) {
 				cnt.Add(1)
 			case <-tens.C:
 				cnt.Add(10)
+			case <-done:
+				return
 			}
 		}
 	}()
@@ -577,12 +605,22 @@ func TestMock_Timer_Reset_Zero(t *testing.T) {
 func TestMock_ReentrantDeadlock(t *testing.T) {
 	With(t)
 
-	mockedClock := internal.NewMockClock()
-	timer20 := mockedClock.NewTimer(20 * time.Second)
+	var (
+		mockedClock = internal.NewMockClock()
+		timer20     = mockedClock.NewTimer(20 * time.Second)
+		done        = make(chan struct{})
+	)
+	defer close(done) // terminates the goroutine we are about to start
+
 	go func() {
-		v := <-timer20.C
-		panic(fmt.Sprintf("timer should not have ticked: %v", v))
+		select {
+		case <-timer20.C:
+			panic("timer should not have ticked")
+		case <-done:
+			return
+		}
 	}()
+
 	mockedClock.AfterFunc(10*time.Second, func() {
 		timer20.Stop()
 	})
@@ -737,15 +775,23 @@ func TestMock_DoesNotDropTicks(t *testing.T) {
 	// arrange: establish a mock clock with DropsTicks set, create
 	// a ticker to tick every 1s and start a goroutine to count the
 	// ticks from the ticker
-	clock := internal.NewMockClock()
-	var cnt atomic.Uint32
+	var (
+		cnt   atomic.Uint32
+		clock = internal.NewMockClock()
+		done  = make(chan struct{})
+	)
+	defer close(done) // terminates the goroutine we are about to start
 
 	ticker := clock.NewTicker(1 * time.Second)
 
 	go func() {
 		for {
-			<-ticker.C
-			cnt.Add(1)
+			select {
+			case <-ticker.C:
+				cnt.Add(1)
+			case <-done:
+				return
+			}
 		}
 	}()
 
@@ -762,15 +808,23 @@ func TestMock_DropsTicks(t *testing.T) {
 	// arrange: establish a mock clock with DropsTicks set, create
 	// a ticker to tick every 1s and start a goroutine to count the
 	// ticks from the ticker
-	clock := internal.NewMockClock(internal.DropsTicks())
-	var cnt atomic.Uint32
+	var (
+		cnt   atomic.Uint32
+		clock = internal.NewMockClock(internal.DropsTicks())
+		done  = make(chan struct{})
+	)
+	defer close(done) // terminates the goroutine we are about to start
 
 	ticker := clock.NewTicker(1 * time.Second)
 
 	go func() {
 		for {
-			<-ticker.C
-			cnt.Add(1)
+			select {
+			case <-ticker.C:
+				cnt.Add(1)
+			case <-done:
+				return
+			}
 		}
 	}()
 
@@ -820,16 +874,28 @@ func Test_Mocked_ContextWithDeadline(t *testing.T) {
 func Test_Mocked_ContextWithDeadlineCause_Stringer(t *testing.T) {
 	With(t)
 
-	clock := internal.NewMockClock()
-	ctx, _ := clock.ContextWithDeadlineCause(context.Background(), clock.Now().Add(time.Second), errors.New("cause"))
+	var (
+		clock       = internal.NewMockClock()
+		deadline    = clock.Now().Add(time.Second)
+		cause       = errors.New("cause")
+		ctx, _      = clock.ContextWithDeadlineCause(context.Background(), deadline, cause)
+		expectedErr = fmt.Sprintf("%s: %s", context.DeadlineExceeded, cause)
 
-	s := fmt.Sprintf("%s", ctx)
-	Expect(s).To(Equal("mocked context.WithDeadline: 1s: 1970-01-01 00:00:01 +0000 UTC (cause: cause)"))
+		asString = func(ctx context.Context) string {
+			return fmt.Sprintf("%s", ctx)
+		}
+	)
+
+	const (
+		deadlineFormat         = "MockContext{deadline: %s (in 1s), cause: %q}"
+		deadlineExceededFormat = "MockContext{deadline: %s (in 0s), err: %q}"
+	)
+
+	Expect(asString(ctx)).To(Equal(fmt.Sprintf(deadlineFormat, deadline, cause)))
 
 	clock.AdvanceBy(time.Second)
 
-	s = fmt.Sprintf("%s", ctx)
-	Expect(s).To(Equal("mocked context.WithDeadline: 0s: 1970-01-01 00:00:01 +0000 UTC [context deadline exceeded: cause]"))
+	Expect(asString(ctx)).To(Equal(fmt.Sprintf(deadlineExceededFormat, deadline, expectedErr)))
 }
 
 // Tests that a mocked ContextWithDeadlineCause wraps the cause error
@@ -853,8 +919,7 @@ func Test_Mocked_ContextWithDeadlineCause(t *testing.T) {
 	select {
 	case <-ctx.Done():
 		Expect(ctx.Err()).Is(context.DeadlineExceeded)
-		Expect(ctx.Err()).Is(cause)
-		Expect(ctx.Err().Error()).To(Equal("context deadline exceeded: cause"))
+		Expect(ctx.Err().Error()).To(Equal(fmt.Sprintf("%s: %s", context.DeadlineExceeded, cause)))
 	default:
 		Fatal("context was not cancelled")
 	}

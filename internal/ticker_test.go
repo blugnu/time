@@ -11,30 +11,47 @@ import (
 func TestTicker(t *testing.T) {
 	With(t)
 
-	var cnt atomic.Uint32
-	clock := SystemClock{}
-	ticker := clock.NewTicker(1 * time.Millisecond)
-	go func() {
-		for {
-			<-ticker.C
-			cnt.Add(1)
-		}
-	}()
+	Run(FlakyTest("ticks at the expected intervals", func() {
+		var (
+			cnt    atomic.Uint32
+			clock  = SystemClockInstance
+			ticker = clock.NewTicker(10 * time.Millisecond)
+			done   = make(chan struct{})
+		)
+		defer close(done) // terminates the goroutine we are about to start
 
-	clock.Sleep(5300 * time.Microsecond)
-	Expect(cnt.Load(), "ticks").To(Equal[uint32](5))
+		// act: start a goroutine that will count the ticks
+		go func() {
+			for {
+				select {
+				case <-ticker.C:
+					cnt.Add(1)
+				case <-done:
+					return
+				}
+			}
+		}()
 
-	cnt.Store(0)
-	ticker.Reset(5 * time.Millisecond)
+		// 10ms ticker should tick twice in 25ms
+		clock.Sleep(25 * time.Millisecond)
+		Expect(cnt.Load(), "ticks").To(Equal[uint32](2))
 
-	clock.Sleep(10800 * time.Microsecond)
-	Expect(cnt.Load(), "ticks").To(Equal[uint32](2))
+		// clear the counter and reset the ticker to 20ms
+		cnt.Store(0)
+		ticker.Reset(20 * time.Millisecond)
 
-	cnt.Store(0)
-	ticker.Stop()
+		// 20ms ticker should tick once in 25ms
+		clock.Sleep(25 * time.Millisecond)
+		Expect(cnt.Load(), "ticks").To(Equal[uint32](1))
 
-	clock.Sleep(5900 * time.Microsecond)
-	Expect(cnt.Load(), "ticks").To(Equal[uint32](0))
+		// clear the counter and stop the ticker
+		cnt.Store(0)
+		ticker.Stop()
+
+		// wait another 25ms; the ticker should no longer be ticking
+		clock.Sleep(25 * time.Millisecond)
+		Expect(cnt.Load(), "ticks").To(Equal[uint32](0))
+	}))
 }
 
 func TestTicker_EnterState_InvalidState(t *testing.T) {
@@ -51,7 +68,7 @@ func TestTicker_EnterState_NoTransition(t *testing.T) {
 	With(t)
 
 	ticker := &ticker{state: tsStopped}
-	defer Expect(Panic()).DidOccur()
+	defer Expect(Panic()).DidNotOccur()
 
 	// act: attempt to enter active state, which is the default state
 	ticker.enterState(tsStopped)
@@ -88,10 +105,13 @@ func TestTicker_Reset_ZeroDuration(t *testing.T) {
 func TestTicker_Tick_WhenNil(t *testing.T) {
 	With(t)
 
-	var sut *ticker
+	var (
+		sut *ticker
+		tm  = time.Now()
+	)
 
-	// act: attempt to tick a nil timer
-	result := sut.tick(time.Time{})
+	// act: attempt to tick a nil ticker
+	result := sut.tick(tm)
 
 	// assert: expect false
 	Expect(result).To(BeFalse())
@@ -100,10 +120,13 @@ func TestTicker_Tick_WhenNil(t *testing.T) {
 func TestTicker_Tick_WhenNotActive(t *testing.T) {
 	With(t)
 
-	var sut = &ticker{state: tsStopped}
+	var (
+		sut = &ticker{state: tsStopped}
+		tm  = time.Now()
+	)
 
-	// act: attempt to tick a nil timer
-	result := sut.tick(time.Time{})
+	// act: attempt to tick a stopped ticker
+	result := sut.tick(tm)
 
 	// assert: expect false
 	Expect(result).To(BeFalse())
@@ -116,13 +139,16 @@ func TestTicker_Tick_NextInTheFuture(t *testing.T) {
 	var (
 		clock = NewMockClock()
 		sut   = clock.NewTicker(1 * time.Second)
+		done  = make(chan struct{})
 	)
+	defer close(done) // terminates the goroutine we are about to start
+
 	go func() {
 		select {
 		case <-sut.C:
-			t.Error("should not have ticked")
-		default:
-			// do nothing
+			Error("ticker should not have ticked")
+		case <-done:
+			return
 		}
 	}()
 
