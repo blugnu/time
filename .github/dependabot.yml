@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      Security Updates:
+        applies-to: security-updates
+        dependency-type: production
+      Updated Dependencies:
+        applies-to: version-updates
+        dependency-type: production
+    labels:
+      - dependencies
+    reviewers:
+      - deltics
