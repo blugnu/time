@@ -1,34 +1,72 @@
-package time
+package time_test
 
 import (
 	"context"
 	"sync/atomic"
 	"testing"
-	"time"
 
-	"github.com/blugnu/test"
+	. "github.com/blugnu/test"
+
+	"github.com/blugnu/time"
+	"github.com/blugnu/time/internal"
 )
 
+func TestAfter(t *testing.T) {
+	With(t)
+
+	var (
+		ctx            = context.Background()
+		mockedStart    time.Time
+		mockedDuration time.Duration
+	)
+	ctx, mock := time.ContextWithMockClock(ctx)
+
+	// act: setup a timer that will tick after 10 milliseconds and a waitable
+	//      goroutine that stores the time of the first tick when it occurs
+	//
+	// FUTURE: specify a timeout for the waitable (when supported)
+
+	mockedStart = time.Now(ctx)
+	ch := time.After(ctx, 10*time.Millisecond)
+	done := internal.Waitable(func() {
+		ticked := <-ch
+		mockedDuration = ticked.Sub(mockedStart)
+	})
+
+	elapsed := time.Dur(func() {
+		mock.AdvanceBy(10 * time.Millisecond)
+		<-done
+	})
+
+	// assert
+	Expect(mockedDuration).ToNot(BeLessThan(10 * time.Millisecond))
+	Expect(elapsed).To(BeLessThan(8 * time.Millisecond))
+}
+
 func TestAfterFunc(t *testing.T) {
-	ctx, clock := ContextWithMockClock(context.Background())
+	With(t)
+
+	ctx, clock := time.ContextWithMockClock(context.Background())
 	var ticked atomic.Bool
 
 	// act
-	_ = AfterFunc(ctx, 10*time.Millisecond, func() {
+	_ = time.AfterFunc(ctx, 10*time.Millisecond, func() {
 		ticked.Store(true)
 	})
 	clock.AdvanceBy(10 * time.Millisecond)
 
 	// assert
-	test.IsTrue(t, ticked.Load())
+	Expect(ticked.Load()).To(BeTrue())
 }
 
 func TestNewTicker(t *testing.T) {
-	ctx, clock := ContextWithMockClock(context.Background())
+	With(t)
+
+	ctx, clock := time.ContextWithMockClock(context.Background())
 	var ticks atomic.Int32
 
 	// act
-	ticker := NewTicker(ctx, 10*time.Millisecond)
+	ticker := time.NewTicker(ctx, 10*time.Millisecond)
 	go func() {
 		for range ticker.C {
 			ticks.Add(1)
@@ -37,15 +75,17 @@ func TestNewTicker(t *testing.T) {
 	clock.AdvanceBy(50 * time.Millisecond)
 
 	// assert
-	test.Value(t, ticks.Load()).Equals(5)
+	Expect(ticks.Load()).To(Equal(int32(5)))
 }
 
 func TestNewTimer(t *testing.T) {
-	ctx, clock := ContextWithMockClock(context.Background())
+	With(t)
+
+	ctx, clock := time.ContextWithMockClock(context.Background())
 	var ticked atomic.Bool
 
 	// act
-	timer := NewTimer(ctx, 10*time.Millisecond)
+	timer := time.NewTimer(ctx, 10*time.Millisecond)
 	go func() {
 		<-timer.C
 		ticked.Store(true)
@@ -53,45 +93,51 @@ func TestNewTimer(t *testing.T) {
 	clock.AdvanceBy(10 * time.Millisecond)
 
 	// assert
-	test.IsTrue(t, ticked.Load())
+	Expect(ticked.Load()).To(BeTrue())
 }
 
 func TestNow(t *testing.T) {
+	With(t)
+
 	tm := time.Date(2023, 10, 1, 2, 3, 4, 5, time.UTC)
-	ctx, _ := ContextWithMockClock(context.Background(), AtTime(tm))
+	ctx, _ := time.ContextWithMockClock(context.Background(), time.AtTime(tm))
 
 	// act
-	now := Now(ctx)
+	now := time.Now(ctx)
 
 	// assert
-	test.Value(t, now).Equals(tm)
+	Expect(now).To(Equal(tm))
 }
 
 func TestSleep(t *testing.T) {
+	With(t)
+
 	var (
-		ctx, clock = ContextWithMockClock(context.Background())
+		ctx, clock = time.ContextWithMockClock(context.Background())
 		dur        time.Duration
-		sleep      WaitFuncs
+		sleep      internal.WaitFuncs
 	)
 
 	// act
 	sleep.Go(func() {
-		Sleep(ctx, 10*time.Millisecond)
+		time.Sleep(ctx, 10*time.Millisecond)
 		dur = clock.SinceCreated()
 	})
 	clock.AdvanceBy(10 * time.Millisecond)
 	sleep.Wait()
 
 	// assert
-	test.Value(t, dur).Equals(10 * time.Millisecond)
+	Expect(dur).To(Equal(10 * time.Millisecond))
 }
 
 func TestTick(t *testing.T) {
-	ctx, clock := ContextWithMockClock(context.Background())
+	With(t)
+
+	ctx, clock := time.ContextWithMockClock(context.Background())
 	var ticked atomic.Int32
 
 	// act
-	ch := Tick(ctx, 10*time.Millisecond)
+	ch := time.Tick(ctx, 10*time.Millisecond)
 	go func() {
 		for range ch {
 			ticked.Add(1)
@@ -100,5 +146,5 @@ func TestTick(t *testing.T) {
 	clock.AdvanceBy(50 * time.Millisecond)
 
 	// assert
-	test.Value(t, ticked.Load()).Equals(5)
+	Expect(ticked.Load()).To(Equal(int32(5)))
 }
