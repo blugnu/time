@@ -1,24 +1,10 @@
-package time
+package internal
 
 import (
 	"fmt"
 	"time"
 )
 
-// Ticker represents a ticker; it may be obtained from SystemClock() or a mock
-// obtained from a MockClock.
-//
-// Usage is the same in either case and is identical to the time.Ticker type
-// in the standard library: the time of each "tick" is read from the channel `C`
-// provided on the Ticker.
-//
-// A ticker created from a mock clock will tick when the associated mock clock
-// is advanced to (or beyond) the next tick time.
-//
-// If a mock clock is advanced by a duration that is greater than the period of
-// the ticker, the ticker will tick at each interval unless the clock was
-// configured to drop ticks. In that case, the Ticker will tick only once at
-// the last time at/before the time advanced to.
 type Ticker struct {
 	// wraps a time.Timer in normal use; for a mock, this is non-nil but is
 	// used only as a container for the <-chan time.Time read-only reference
@@ -32,10 +18,6 @@ type Ticker struct {
 	initialised bool
 }
 
-func (t *Ticker) isMocked() bool {
-	return t.ticker != nil
-}
-
 // Reset resets the ticker to the specified duration.
 //
 // If the Ticker has been stopped it is restarted with the new duration.
@@ -43,12 +25,13 @@ func (t *Ticker) isMocked() bool {
 // If the Ticker is already running it will be reset to the new duration; the
 // next tick will occur at the specified duration from the current time.
 //
-// the function panics if the given duration is zero or negative, or if the
+// The function panics if the given duration is zero or negative, or if the
 // Ticker has not been initialized, .
 func (t *Ticker) Reset(d time.Duration) {
 	if !t.initialised {
 		panic(fmt.Errorf("%w Ticker", errResetCalledOnUninitialized))
 	}
+
 	if t.isMocked() {
 		t.ticker.reset(d)
 		return
@@ -62,8 +45,8 @@ func (t *Ticker) Reset(d time.Duration) {
 func (t *Ticker) Stop() {
 	if t.isMocked() {
 		t.ticker.stop()
-		return
 	}
+
 	t.Ticker.Stop()
 }
 
@@ -73,19 +56,19 @@ type ticker struct {
 	c        chan time.Time
 	d        time.Duration
 	next     time.Time
-	state    tickerState
-	clock    *mockClock
+	state    TickerState
+	clock    *MockClock
 }
 
 // id returns the id of the ticker.
-func (mock ticker) id() int {
+func (mock *ticker) id() int {
 	return mock.tickerId
 }
 
 // enterState handles the transition of the ticker to a new state.
 // It will panic if the transition is invalid or if the state is not
 // supported by the ticker.
-func (mock *ticker) enterState(state tickerState) {
+func (mock *ticker) enterState(state TickerState) {
 	if mock.state == state {
 		return
 	}
@@ -103,8 +86,13 @@ func (mock *ticker) enterState(state tickerState) {
 	}
 }
 
+// isMocked returns true if the ticker is a mock ticker
+func (t *Ticker) isMocked() bool {
+	return t.ticker != nil
+}
+
 // nextTick returns the next tick time for the ticker.
-func (mock ticker) nextTick() time.Time {
+func (mock *ticker) nextTick() time.Time {
 	return mock.next
 }
 
@@ -149,7 +137,7 @@ func (t *ticker) tick(now time.Time) bool {
 
 	// tick at the time that was determined and yield to allow any goroutines
 	// that may be waiting on the ticker channel to be scheduled
-	go func() { t.clock.withLock(func(c *mockClock) { c.now = at }); t.c <- at }()
+	go func() { t.clock.withLock(func(c *MockClock) { c.now = at }); t.c <- at }()
 	time.Sleep(t.clock.yield)
 
 	return true

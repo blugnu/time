@@ -1,91 +1,16 @@
-package time
+package internal
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-// MockClock extends the Clock interface with methods to manipulate the
-// current time of the clock.  In normal use, the underlying clock time
-// is advanced only when explicitly directed to do so using AdvanceBy()
-// or AdvanceTo() methods; this is "stopped" mode.
-//
-// When the clock is "running" the current time is advanced semi-automatically
-// by the passage of real-time since the last time the clock was updated.
-// In "running" mode, the clock is advanced any time that Now() is called,
-// or by calling Update().
-//
-// It is used to simulate the passage of time in tests.
-type MockClock interface {
-	// MockClock is a mock implementation of the time.Clock interface.
-	Clock
-
-	// AdvanceBy moves the current time of the mock clock forward by a
-	// specified duration, triggering any timers or tickers that would have
-	// been triggered during that passage of time.
-	//
-	// Calling this method while the clock is running will result in a panic.
-	AdvanceBy(d time.Duration)
-
-	// AdvanceTo moves the current time of the mock clock to a specific time,
-	// triggering any timers or tickers that would have been triggered during
-	// that passage of time.
-	//
-	// Calling this method while the clock is running will result in a panic.
-	AdvanceTo(t time.Time)
-
-	// CreatedAt returns the mocked time at which the clock was started when created.
-	CreatedAt() time.Time
-
-	// IsRunning returns true if the clock is in a running state.
-	// In this state the clock is advanced by elapsed time whenever Now()
-	// is obtained from the clock or when Update() is explicitly called.
-	// AdvanceBy() and AdvanceTo() are not supported when the clock is in a
-	// running state and will panic.
-	//
-	// This more closely mimics the behaviour of a real clock but tests using
-	// a running clock may be less deterministic and run more slowly than
-	// they might.
-	IsRunning() bool
-
-	// SinceCreated returns the elapsed mock time since the clock was created.
-	// This is the same as calling clock.Since(clock.CreatedAt()).
-	SinceCreated() time.Duration
-
-	// Stop stops the clock from advancing automatically.  Every call to
-	// Stop() must be matched with a call to Start() to resume automatic
-	// advancement.
-	//
-	// A MockClock is initially created in stopped mode unless the StartRunning
-	// option is specified when initialising the clock.
-	Stop()
-
-	// Start resumes automatic advancement of the clock.  Every call to
-	// Start() must be matched with a call to Stop() to stop automatic
-	// advancement.
-	//
-	// A MockClock is initially created in stopped mode unless the StartRunning
-	// option is specified when initialising the clock.  i.e. if the clock
-	// is created in stopped mode, an initial call to Start() is required to
-	// start the clock.
-	Start()
-
-	// Update moves the current time of the mock clock forward by a duration
-	// corresponding to the passage of real-time since it was last updated,
-	// triggering any timers or tickers that would have been triggered during
-	// that passage of time.
-	//
-	// Calling this method while the clock is stopped will result in a panic.
-	Update()
-}
-
-// mockClock represents a mock clock that moves forward from an established time and can
+// MockClock represents a mock clock that moves forward from an established time and can
 // be advanced, rewound or reset at will.
-type mockClock struct {
+type MockClock struct {
 	sync.RWMutex
 
 	// createdAt is the time at which the clock was created.
@@ -128,73 +53,20 @@ type mockClock struct {
 	// Maintaining inactive tickers separately allows for tickers to be restarted
 	// and for timers to be reset, by returning them to the active list.
 	tickers struct {
-		active   tickables
-		inactive tickables
+		active   Tickables
+		inactive Tickables
 	}
 
 	// nextTickerId is the next id to assign to a ticker.
 	nextTickerId int
 }
 
-// eval is a helper function that executes a supplied function to return a
-// value of type T while holding a read lock on a provided clock.
-//
-// The function must not attempt to acquire a lock on the clock itself, as
-// this will result in a deadlock.  The function must also not attempt to
-// modify the state of the clock.
-func eval[T any](m *mockClock, fn func() T) T {
-	m.RLock()
-	defer m.RUnlock()
-	return fn()
-}
+// MockClockOption represents an option that can be passed to NewMockClock.
+type MockClockOption func(*MockClock)
 
-func (m *mockClock) panicIfLocked() {
-	if !m.TryLock() {
-		panic(errClockLocked)
-	}
-	m.Unlock()
-}
-
-func (m *mockClock) withLock(fn func(*mockClock)) {
-	m.Lock()
-	defer m.Unlock()
-	fn(m)
-}
-
-// ClockOption represents an option that can be passed to NewMockClock.
-type ClockOption func(*mockClock)
-
-// NewMockClock returns an instance of a mock clock.
-//
-// The default settings on a new clock are:
-//
-//   - inital time set to the UNIX epoch (00:00:00 UTC on Thursday, 1 Jan 1970)
-//   - stopped; advance with AdvanceBy() or AdvanceTo()
-//   - does not drop ticks
-//   - sleeps the calling goroutine for 1ms on various operations
-//
-// When stopped, the clock must be explicitly advanced using AdvanceBy() or
-// AdvanceTo().  When not stopped Update() may be used to advance the clock
-// by the elapsed real-time since the last advancement.
-//
-// The clock can be customised using the provided options:
-//
-//   - AtNow() sets the initial time of the mock clock to the current time;
-//
-//   - AtTime(t time.Time) sets the initial time of the mock clock;
-//
-//   - DropsTicks() sets the clock to fire tickers only once where multiple
-//     ticks would have been triggered by a single advance of the clock
-//
-//   - WithYield(d time.Duration) sets a duration for which the calling goroutine is
-//     suspended before and after each advancement of the clock.
-//
-//   - StartRunning() sets the mock clock to start in a running state; in the running
-//     state the clock is advanced by elapsed time whenever Now() is obtained from
-//     the clock or when Update() is explicitly called.  AdvanceBy() and AdvanceTo()
-//     are not supported in the running state and will panic.
-func NewMockClock(options ...ClockOption) MockClock {
-	ret := &mockClock{
+// NewMockClock returns a new mock clock
+func NewMockClock(options ...MockClockOption) *MockClock {
+	ret := &MockClock{
 		createdAt: time.Unix(0, 0),
 		loc:       time.UTC,
 		now:       time.Unix(0, 0).UTC(),
@@ -213,16 +85,16 @@ func NewMockClock(options ...ClockOption) MockClock {
 // ------------------------------------------------------------------------------------------------
 
 // implements the Clock interface
-var _ Clock = (*mockClock)(nil)
+var _ Clock = (*MockClock)(nil)
 
 // After waits for the duration to elapse and then sends the current time on the returned channel.
-func (m *mockClock) After(d time.Duration) <-chan time.Time {
+func (m *MockClock) After(d time.Duration) <-chan time.Time {
 	return m.NewTimer(d).C
 }
 
 // AfterFunc waits for the duration to elapse and then executes a function in its own goroutine.
 // A Timer is returned that can be stopped.
-func (m *mockClock) AfterFunc(d time.Duration, f func()) *Timer {
+func (m *MockClock) AfterFunc(d time.Duration, f func()) *Timer {
 	return m.newTimer(d, f)
 }
 
@@ -232,7 +104,7 @@ func (m *mockClock) AfterFunc(d time.Duration, f func()) *Timer {
 //
 // If the clock is not frozen, the clock will first advance by the time elapsed since the
 // clock was last updated.
-func (m *mockClock) Now() time.Time {
+func (m *MockClock) Now() time.Time {
 	m.Lock()
 	defer m.Unlock()
 
@@ -240,12 +112,12 @@ func (m *mockClock) Now() time.Time {
 }
 
 // Since returns time since `t` using the mock clock's wall time.
-func (m *mockClock) Since(t time.Time) time.Duration {
+func (m *MockClock) Since(t time.Time) time.Duration {
 	return m.Now().Sub(t)
 }
 
 // Until returns time until `t` using the mock clock's wall time.
-func (m *mockClock) Until(t time.Time) time.Duration {
+func (m *MockClock) Until(t time.Time) time.Duration {
 	return t.Sub(m.Now())
 }
 
@@ -261,7 +133,7 @@ func (m *mockClock) Until(t time.Time) time.Duration {
 // duration.
 //
 // The clock must be moved forward in a separate goroutine.
-func (m *mockClock) Sleep(d time.Duration) {
+func (m *MockClock) Sleep(d time.Duration) {
 	if d <= 0 {
 		return
 	}
@@ -275,7 +147,7 @@ func (m *mockClock) Sleep(d time.Duration) {
 // Tick is a convenience function for Ticker().
 // It will return a ticker channel that cannot be stopped or nil if the
 // given duration is 0 or negative.
-func (m *mockClock) Tick(d time.Duration) <-chan time.Time {
+func (m *MockClock) Tick(d time.Duration) <-chan time.Time {
 	if d <= 0 {
 		return nil
 	}
@@ -283,23 +155,23 @@ func (m *mockClock) Tick(d time.Duration) <-chan time.Time {
 }
 
 // Ticker creates a new instance of Ticker.
-func (m *mockClock) NewTicker(d time.Duration) *Ticker {
+func (m *MockClock) NewTicker(d time.Duration) *Ticker {
 	return m.newTicker(d)
 }
 
 // Timer creates a new Timer.  Since this is a mock implementation, the Timer
 // will not fire until the clock is advanced.
-func (m *mockClock) NewTimer(d time.Duration) *Timer {
+func (m *MockClock) NewTimer(d time.Duration) *Timer {
 	return m.newTimer(d, nil)
 }
 
 // ContextWithDeadline returns a new context with the given deadline.
-func (m *mockClock) ContextWithDeadline(ctx context.Context, t time.Time) (context.Context, context.CancelFunc) {
+func (m *MockClock) ContextWithDeadline(ctx context.Context, t time.Time) (context.Context, context.CancelFunc) {
 	return m.ContextWithDeadlineCause(ctx, t, nil)
 }
 
 // ContextWithDeadlineCause returns a new context with the given deadline and cause.
-func (m *mockClock) ContextWithDeadlineCause(ctx context.Context, t time.Time, cause error) (context.Context, context.CancelFunc) {
+func (m *MockClock) ContextWithDeadlineCause(ctx context.Context, t time.Time, cause error) (context.Context, context.CancelFunc) {
 	d := eval(m, func() time.Duration {
 		return t.Sub(m.now)
 	})
@@ -307,56 +179,34 @@ func (m *mockClock) ContextWithDeadlineCause(ctx context.Context, t time.Time, c
 }
 
 // ContextWithTimeout returns a new context with the given timeout.
-func (m *mockClock) ContextWithTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+func (m *MockClock) ContextWithTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
 	return m.ContextWithTimeoutCause(ctx, d, nil)
 }
 
 // ContextWithTimeoutCause returns a new context with the given timeout and cause.
-func (m *mockClock) ContextWithTimeoutCause(ctx context.Context, d time.Duration, cause error) (context.Context, context.CancelFunc) {
+func (m *MockClock) ContextWithTimeoutCause(ctx context.Context, d time.Duration, cause error) (context.Context, context.CancelFunc) {
 	deadline := eval(m, func() time.Time {
 		return m.now.Add(d)
 	})
 
 	// if the parent context has a deadline which will occur before the timeout
 	// return a cancellable context (inheriting the parent deadline since that will
-	// be the effective timeout)
-	if px, pd := ctx.Deadline(); pd && px.Before(deadline) {
+	// be the effective timeout); the specified cause is discarded since the parent
+	// will provide the cause of the deadline expiry
+	if parentExpires, pd := ctx.Deadline(); pd && parentExpires.Before(deadline) {
 		return context.WithCancel(ctx)
 	}
 
-	return newMockContext(ctx, m, deadline, cause)
+	return NewMockContext(ctx, m, deadline, cause)
 }
 
 // ------------------------------------------------------------------------------------------------
-
-// implements the MockClock interface
-var _ MockClock = (*mockClock)(nil)
-
-// advance moves the current time of the mock clock forward by a duration
-// corresponding to the passage of real-time since it was last updated.
-//
-// If the clock is currently stopped the current time is not advanced and must
-// be advanced by an explicit interval using AdvanceBy() or AdvanceTo().
-//
-// This method is not thread-safe and should only be called while the clock
-// is locked.
-func (m *mockClock) advance() time.Time {
-	if !m.IsRunning() {
-		return m.now
-	}
-
-	var elapsed = time.Since(m.updated)
-	m.now = m.now.Add(elapsed)
-	m.updated = m.updated.Add(elapsed)
-
-	return m.now
-}
 
 // Update moves the current time of the mock clock forward by a duration
 // corresponding to the passage of real-time since it was last advanced.
 //
 // Calling this method while the clock is frozen will result in a panic.
-func (m *mockClock) Update() {
+func (m *MockClock) Update() {
 	if !m.IsRunning() {
 		panic(ErrClockNotRunning)
 	}
@@ -369,7 +219,7 @@ func (m *mockClock) Update() {
 
 // AdvanceBy moves the clock forward by the specified duration.
 // This should only be called from a single goroutine at a time.
-func (m *mockClock) AdvanceBy(d time.Duration) {
+func (m *MockClock) AdvanceBy(d time.Duration) {
 	t := eval(m, func() time.Time {
 		return m.now.Add(d)
 	})
@@ -381,11 +231,11 @@ func (m *mockClock) AdvanceBy(d time.Duration) {
 //
 // No attempt is made to simulate the expected elapsed time between the current time
 // and the new time or any relative time between timers.
-func (m *mockClock) AdvanceTo(t time.Time) {
+func (m *MockClock) AdvanceTo(t time.Time) {
 	// a common pattern in tests involving a mock clock is to establish a
 	// goroutine to perform some setup or spy, before advancing the mock clock.
 	//
-	// Yielding here provides room for such goroutines to be established.
+	// yielding here provides room for such goroutines to be established.
 	time.Sleep(m.yield)
 
 	// we will only advance the clock to the t if that time is later than the current
@@ -403,7 +253,7 @@ func (m *mockClock) AdvanceTo(t time.Time) {
 	}
 
 	// Ensure that we end with the new time.
-	m.withLock(func(m *mockClock) {
+	m.withLock(func() {
 		m.now = t.In(m.loc)
 		m.updated = time.Now()
 	})
@@ -414,7 +264,7 @@ func (m *mockClock) AdvanceTo(t time.Time) {
 }
 
 // CreatedAt returns the time at which the clock was created.
-func (m *mockClock) CreatedAt() time.Time {
+func (m *MockClock) CreatedAt() time.Time {
 	// this is not mutated after the clock is created so no lock is needed
 	return m.createdAt
 }
@@ -430,18 +280,18 @@ func (m *mockClock) CreatedAt() time.Time {
 // on the created clock.
 //
 // A running clock may be stopped by calling Stop() on that clock.
-func (m *mockClock) IsRunning() bool {
+func (m *MockClock) IsRunning() bool {
 	return m.nStopped.Load() == 0
 }
 
 // SinceCreated returns the elapsed mock time since the clock was created.
 // This is the same as calling clock.Since(clock.CreatedAt()).
-func (m *mockClock) SinceCreated() time.Duration {
+func (m *MockClock) SinceCreated() time.Duration {
 	return m.Since(m.CreatedAt())
 }
 
 // Start decrements the stop counter on the clock.
-func (m *mockClock) Start() {
+func (m *MockClock) Start() {
 	if n := m.nStopped.Add(-1); n == 0 {
 		m.Lock()
 		defer m.Unlock()
@@ -458,14 +308,33 @@ func (m *mockClock) Start() {
 //
 // Every call to Stop() must be matched with a call to Start() to resume
 // implicit advancement.
-func (m *mockClock) Stop() {
+func (m *MockClock) Stop() {
 	m.nStopped.Add(1)
 }
 
 // ------------------------------------------------------------------------------------------------
 
-func (m *mockClock) resetTicker(t *ticker, d time.Duration) {
-	m.withLock(func(m *mockClock) {
+// advance moves the current time of the mock clock forward by a duration
+// corresponding to the passage of real-time since it was last updated.
+//
+// If the clock is currently stopped the current time is not advanced and must
+// be advanced by an explicit interval using AdvanceBy() or AdvanceTo().
+//
+// This method should only be called when the caller holds the clock's lock.
+func (m *MockClock) advance() time.Time {
+	if !m.IsRunning() {
+		return m.now
+	}
+
+	var elapsed = time.Since(m.updated)
+	m.now = m.now.Add(elapsed)
+	m.updated = m.updated.Add(elapsed)
+
+	return m.now
+}
+
+func (m *MockClock) resetTicker(t *ticker, d time.Duration) {
+	m.withLock(func() {
 		t.d = d
 		t.next = m.now.Add(max(d, 0))
 	})
@@ -473,8 +342,8 @@ func (m *mockClock) resetTicker(t *ticker, d time.Duration) {
 	t.enterState(tsActive)
 }
 
-func (m *mockClock) resetTimer(t *timer, d time.Duration) {
-	m.withLock(func(m *mockClock) {
+func (m *MockClock) resetTimer(t *timer, d time.Duration) {
+	m.withLock(func() {
 		if t.next = t.clock.now.Add(d); d == 0 {
 			t.tick(t.clock.now)
 		}
@@ -486,13 +355,13 @@ func (m *mockClock) resetTimer(t *timer, d time.Duration) {
 }
 
 // activateTicker adds a ticker to the list of active tickers.
-func (m *mockClock) activateTicker(t tickable) {
+func (m *MockClock) activateTicker(t tickable) {
 	m.tickers.active = append(m.tickers.active, t)
 	sort.Sort(m.tickers.active)
 }
 
 // disableTicker moves a ticker from the active list to the inactive list.
-func (m *mockClock) disableTicker(id int) {
+func (m *MockClock) disableTicker(id int) {
 	var ticker tickable
 
 	if m.tickers.active, ticker = m.tickers.active.take(id); ticker != nil {
@@ -501,7 +370,7 @@ func (m *mockClock) disableTicker(id int) {
 }
 
 // enableTicker moves a ticker from the inactive list to the active list.
-func (m *mockClock) enableTicker(id int) {
+func (m *MockClock) enableTicker(id int) {
 	var ticker tickable
 
 	if m.tickers.inactive, ticker = m.tickers.inactive.take(id); ticker != nil {
@@ -510,7 +379,7 @@ func (m *mockClock) enableTicker(id int) {
 }
 
 // newTicker creates a new Ticker backed by a mockTicker.
-func (m *mockClock) newTicker(d time.Duration) *Ticker {
+func (m *MockClock) newTicker(d time.Duration) *Ticker {
 	m.panicIfLocked()
 
 	ticker := eval(m, func() *Ticker {
@@ -542,7 +411,7 @@ func (m *mockClock) newTicker(d time.Duration) *Ticker {
 
 // tick causes the first active ticker before time t (if any) to tick.
 // Returns true if a ticker was ticked.
-func (m *mockClock) tick(t time.Time) bool {
+func (m *MockClock) tick(t time.Time) bool {
 	m.panicIfLocked()
 
 	ticker := eval(m, func() tickable {
@@ -564,7 +433,7 @@ func (m *mockClock) tick(t time.Time) bool {
 
 	ticker.tick(t)
 
-	m.withLock(func(m *mockClock) {
+	m.withLock(func() {
 		sort.Sort(m.tickers.active)
 	})
 
@@ -572,10 +441,12 @@ func (m *mockClock) tick(t time.Time) bool {
 }
 
 // newTimer creates a new Timer backed by a mocked timer.
-func (m *mockClock) newTimer(d time.Duration, fn func()) (result *Timer) {
-	m.withLock(func(m *mockClock) {
+func (m *MockClock) newTimer(d time.Duration, fn func()) *Timer {
+	var result *Timer
+
+	m.withLock(func() {
 		// a time.Timer is used to provide a read-only reference to the
-		// the channel on which the time is sent when the timer expires
+		// channel on which the time is sent when the timer expires
 		// (when no function is provided).
 		//
 		// the time.Timer is not initialised and is not used for timing
@@ -609,105 +480,30 @@ func (m *mockClock) newTimer(d time.Duration, fn func()) (result *Timer) {
 	return result
 }
 
-// ensure that mockContext implements the context.Context interface
-var _ context.Context = (*mockContext)(nil)
+func (m *MockClock) panicIfLocked() {
+	if !m.TryLock() {
+		panic(ErrClockLocked)
+	}
 
-type mockContext struct {
-	sync.Mutex
-
-	clock    Clock
-	parent   context.Context
-	deadline time.Time
-	done     chan struct{}
-
-	err   error
-	timer *Timer
+	m.Unlock()
 }
 
-// newMockContext returns a new context with the given deadline and a
-// cancellable timer.
+func (m *MockClock) withLock(fn func()) {
+	m.Lock()
+	defer m.Unlock()
+
+	fn()
+}
+
+// eval is a helper function that executes a supplied function to return a
+// value of type T while holding a read lock on a provided clock.
 //
-// If the specified deadline has already passed, the context is immediately
-// cancelled with context.DeadlineExceeded.
-func newMockContext(
-	parent context.Context,
-	clock Clock,
-	deadline time.Time,
-	cause error,
-) (*mockContext, context.CancelFunc) {
-	ctx := &mockContext{
-		clock:    clock,
-		parent:   parent,
-		deadline: deadline.UTC(),
-		done:     make(chan struct{}),
-	}
+// The function must not attempt to acquire a lock on the clock itself, as
+// this will result in a deadlock.  The function must also not attempt to
+// modify the state of the clock.
+func eval[T any](m *MockClock, fn func() T) T {
+	m.RLock()
+	defer m.RUnlock()
 
-	// if the parent has a cancellation channel arrange to cancel the new
-	// child context if the parent is cancelled
-	if parent.Done() != nil {
-		go func() {
-			select {
-			case <-parent.Done():
-				ctx.cancel(parent.Err())
-			case <-ctx.Done():
-				// if the child context is cancelled, stop listening for
-				// cancellation on the parent context
-			}
-		}()
-	}
-
-	dur := clock.Until(deadline)
-	if dur <= 0 {
-		ctx.cancel(context.DeadlineExceeded) // deadline has already passed
-		return ctx, func() { /* NO-OP */ }
-	}
-
-	ctx.Lock()
-	defer ctx.Unlock()
-
-	if ctx.err == nil {
-		// if the context is not already cancelled, start a timer to cancel
-		// the context when the deadline is reached
-		ctx.timer = clock.AfterFunc(dur, func() {
-			err := context.DeadlineExceeded
-			if cause != nil {
-				err = fmt.Errorf("%w: %w", err, cause)
-			}
-			ctx.cancel(err)
-		})
-	}
-
-	// return the new context and a cancel function
-	// the cancel function will stop the timer if it is still running
-	// and cancel the context
-	return ctx, func() { ctx.cancel(context.Canceled) }
-}
-
-func (c *mockContext) cancel(err error) {
-	c.Lock()
-	defer c.Unlock()
-
-	if c.err != nil {
-		return // already canceled
-	}
-
-	c.err = err
-	close(c.done)
-
-	if c.timer != nil {
-		c.timer.Stop()
-		c.timer = nil
-	}
-}
-
-func (c *mockContext) Deadline() (deadline time.Time, ok bool) { return c.deadline, true }
-
-func (c *mockContext) Done() <-chan struct{} { return c.done }
-
-func (c *mockContext) Err() error { return c.err }
-
-func (c *mockContext) Value(key any) any { return c.parent.Value(key) }
-
-func (c *mockContext) String() string {
-	return fmt.Sprintf("mock: context.WithDeadline: %s: %s", c.deadline.Sub(c.clock.Now()), c.deadline)
+	return fn()
 }

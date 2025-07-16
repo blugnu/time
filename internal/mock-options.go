@@ -1,18 +1,8 @@
-package time
+package internal
 
 import (
 	"time"
 )
-
-// AtNow is a convenience for AtTime(time.Now()).
-//
-// This may be useful for testing purposes when you want to start the clock at the
-// current time whilst retaining the ability to control the advancement of time.
-//
-// The time is set in the location of the clock.
-func AtNow() ClockOption {
-	return AtTime(time.Now())
-}
 
 // AtTime sets the initial time of the mock clock.
 //
@@ -23,10 +13,10 @@ func AtNow() ClockOption {
 // # Default
 //
 //	1970-01-01 00:00:00 +0000 UTC (in the location of the clock)
-func AtTime(t time.Time) ClockOption {
-	return func(m *mockClock) {
+func AtTime(t time.Time) MockClockOption {
+	return func(m *MockClock) {
 		m.now = t.In(m.loc)
-		m.updated = time.Now()
+		m.updated = SystemClockInstance.Now()
 	}
 }
 
@@ -53,8 +43,8 @@ func AtTime(t time.Time) ClockOption {
 // # Default
 //
 //	not set/disabled
-func DropsTicks() ClockOption {
-	return func(m *mockClock) {
+func DropsTicks() MockClockOption {
+	return func(m *MockClock) {
 		m.dropsTicks = true
 	}
 }
@@ -69,9 +59,10 @@ func DropsTicks() ClockOption {
 // # Default
 //
 //	UTC
-func InLocation(loc *time.Location) ClockOption {
-	return func(m *mockClock) {
+func InLocation(loc *time.Location) MockClockOption {
+	return func(m *MockClock) {
 		m.now = m.now.In(loc)
+		m.loc = loc
 	}
 }
 
@@ -89,13 +80,13 @@ func InLocation(loc *time.Location) ClockOption {
 // # Default
 //
 //	not set / stopped
-func StartRunning() ClockOption {
-	return func(m *mockClock) {
+func StartRunning() MockClockOption {
+	return func(m *MockClock) {
 		m.Start()
 	}
 }
 
-// Yielding sets a duration for which the calling goroutine will be suspended
+// YieldTime sets a duration for which the calling goroutine will be suspended
 // when performing operations such as advancing the clock or adding a timer or ticker.
 //
 // This allows other goroutines to be scheduled at times when it may be useful for a test.
@@ -107,8 +98,8 @@ func StartRunning() ClockOption {
 // # Default
 //
 //	1ms
-func Yielding(d time.Duration) ClockOption {
-	return func(m *mockClock) {
+func YieldTime(d time.Duration) MockClockOption {
+	return func(m *MockClock) {
 		m.yield = max(d, 0)
 	}
 }

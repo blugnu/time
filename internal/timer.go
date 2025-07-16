@@ -1,19 +1,11 @@
-package time
+package internal
 
 import (
 	"fmt"
 	"time"
 )
 
-// Timer represents a timer; it may obtained from the SystemClock() or a mock
-// obtained from a MockClock.
-//
-// Usage is the same in either case and is identical to the time.Timer type
-// in the standard library: the time of the timer is read from the channel
-// `C` provided on the Timer.
-//
-// A timer created from a mock clock will tick when the associated mock clock
-// is advanced to (or beyond) the time specified on the Timer.
+// Timer implements a timer that can be used with a mock clock
 type Timer struct {
 	// wraps a time.Timer in normal use; for a mock, this is non-nil but is
 	// used only as a container for the <-chan time.Time read-only reference
@@ -23,14 +15,8 @@ type Timer struct {
 	// non-nil only when timer is mocked
 	*timer
 
-	// indicates whether the timer has been initialized
+	// indicates whether the timer has been initialised
 	initialised bool
-}
-
-// isMocked returns true if the timer is a mock timer, false if it is a
-// standard library timer.
-func (t *Timer) isMocked() bool {
-	return t.timer != nil
 }
 
 // Reset modifies the timer to expire after duration d from the current time.
@@ -43,7 +29,6 @@ func (t *Timer) Reset(d time.Duration) bool {
 		panic(fmt.Errorf("%w Timer", errResetCalledOnUninitialized))
 	}
 
-	// if the timer is mocked, use the mock's Reset method
 	if t.isMocked() {
 		return t.timer.reset(d)
 	}
@@ -54,7 +39,6 @@ func (t *Timer) Reset(d time.Duration) bool {
 // Stop prevents the Timer from firing. It returns true if the call stops the
 // timer, false if the timer has already expired or been stopped.
 func (t *Timer) Stop() bool {
-	// if the timer is mocked, use the mock's Stop method
 	if t.isMocked() {
 		return t.timer.stop()
 	}
@@ -68,11 +52,11 @@ type timer struct {
 	fn       func()
 	next     time.Time
 	state    tickerState
-	clock    *mockClock
+	clock    *MockClock
 }
 
 // id returns the id of the timer.
-func (mock timer) id() int {
+func (mock *timer) id() int {
 	return mock.tickerId
 }
 
@@ -99,8 +83,14 @@ func (mock *timer) enterState(state tickerState) {
 	}
 }
 
+// isMocked returns true if the timer is a mock timer, false if it is a
+// standard library timer.
+func (t *Timer) isMocked() bool {
+	return t.timer != nil
+}
+
 // nextTick returns the next tick time for the timer.
-func (mock timer) nextTick() time.Time {
+func (mock *timer) nextTick() time.Time {
 	return mock.next
 }
 
