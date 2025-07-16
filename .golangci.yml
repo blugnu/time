@@ -1,33 +1,51 @@
-# version: "1"
+version: "2"
 linters:
-  enable:
-    - gosec
+  default: all
   disable:
-    - wsl
+    - err113                     # makes it impossible to use errors.New() in tests
+    - embeddedstructfieldcheck   # often acceptable (subjective)
+    - exhaustruct                # makes partial struct initialization impossible
+    - funlen                     # function length is subjective, not objective
+    - gochecknoglobals           # there are legitimate uses for package variables
+    - godot                      # not all comments need end with a period
+    - inamedparam                # parameter names are not significant in interfaces though may be helpful (subjective)
+    - interfacebloat             # the acceptable number of methods in an interface is subjective
+    - lll                        # long lines (> col 120) are sometimes acceptable
+    - nlreturn                   # opinionated and subjective
+    - noinlineerr                # inline error checks are sometimes preferable
+    - thelper                    # makes scenario exec(testing.T) test cases impossible
+    - paralleltest               # parallel tests are not always appropriate
+    - varnamelen                 # excessively opinionated, subjective
+    - wsl                        # unreasonably opinionated, buggy and unhelpful
+    - wsl_v5                     # unreasonably opinionated, buggy and unhelpful
 
-linters-settings:
-  # see: v1: https://golangci-lint.run/usage/linters/#enabled-by-default
-  godox:
-    keywords:
-      - "TODO"
+    # not supported when go.mod Go version is <1.22
+    - copyloopvar
+    - intrange
 
-# settings: (v2)
-  # see: https://golangci-lint.run/usage/linters#linters-configuration
+    # exceptions specific to the needs of this project
+    - forbidigo           # Println is used to test stdout
+    - ireturn             # returning any is required when dealing with types of unknown value
 
-#issues:
-  # see: https://golangci-lint.run/usage/configuration/#issues-configuration
+  settings:
+    depguard:
+      rules:
+        tests:
+          files:
+            - $test
+          list-mode: lax
+          allow: ["*"]
 
-output:
-  # see https://golangci-lint.run/usage/configuration/#output-configuration
-  print-issued-lines: false
-  formats:
-    - format: colored-line-number
-      path: stdout
+    # disabled until I figure out a way to FAIL on a PR branch and only WARN on feature branches
+    # godox:
+    #   keywords:
+    #     - TODO
 
-run:
-  # see: https://golangci-lint.run/usage/configuration/#run-configuration
-  concurrency: 8
+    revive:
+      rules:
+        - name: package-comments
+          disabled: true
 
-#severity:
-  # see: https://golangci-lint.run/usage/configuration/#severity-configuration
-
+    staticcheck:
+      checks:
+        - -QF1008    # "could remove embedded field <name> from selector"; sometimes it is useful (if unnecessary) to disambiguate
