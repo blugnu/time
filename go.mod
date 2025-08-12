@@ -6,4 +6,4 @@ module github.com/blugnu/time
 
 go 1.23
 
-require github.com/blugnu/test v0.11.0
+require github.com/blugnu/test v0.12.0
